@@ -1,0 +1,11 @@
+# Copie para terraform.tfvars (gitignored) antes de rodar terraform apply de verdade.
+# Nunca commitar terraform.tfvars com valores reais.
+
+aws_region   = "us-east-1"
+environment  = "dev"
+project_name = "erp-sales-lakehouse"
+
+# ARN da role/instance profile que o Databricks vai assumir para acessar o S3.
+# Enquanto não existe um workspace Databricks real, deixe null — o Terraform
+# usa a própria conta AWS como principal de confiança (placeholder seguro).
+# databricks_pipeline_role_trust_arn = "arn:aws:iam::123456789012:role/databricks-cross-account-role"

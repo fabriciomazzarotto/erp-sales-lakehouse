@@ -1,0 +1,56 @@
+# Environment / secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Databricks / Spark
+.databricks/
+*.dbc
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Delta Lake local test outputs
+data/
+checkpoints/
+_delta_log/
+
+# Power BI — snapshot local gerado por powerbi/export_snapshot.py (regenerável
+# a qualquer momento; mesma lógica de data/ acima, dado gerado não vai pro Git)
+powerbi/export/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Claude Code — settings.json tem defaultMode: bypassPermissions (conveniência
+# local deste ambiente); não deve se propagar automaticamente para quem clonar
+# o repo. Os agentes (.claude/agents/) continuam versionados normalmente.
+.claude/settings.json
+.claude/settings.local.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/settings.json.example
+
+# Logs
+*.log
+logs/
+
+# Terraform (.terraform.lock.hcl NÃO entra aqui — deve ser versionado)
+infra/terraform/.terraform/
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/terraform.tfvars
+infra/terraform/*.tfplan
