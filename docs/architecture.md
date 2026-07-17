@@ -78,15 +78,17 @@ Entre as estratégias possíveis (coluna de data, ID incremental, watermark, has
 
 Tabelas pequenas e de baixa mutação (`Regions`, `PaymentMethods`) serão carregadas em modo **full**, pois o custo de comparação incremental não compensa o ganho.
 
-## 4.1. Orquestração e atualização automática (produção)
+## 4.1. Orquestração e atualização automática
 
-O pipeline hoje é rodado manualmente (`.venv/Scripts/python notebooks/0X_*.py`, em sequência). Isso é aceitável para desenvolvimento/portfólio, mas um ERP real gera dado novo todo dia — a versão de produção precisa disso agendado, não disparado à mão:
+**Local (implementado e validado — ver [`docs/automation.md`](automation.md)):** duas tarefas no Windows Task Scheduler, sem depender de AWS. Uma simula um dia de atividade no ERP de origem (novas notas/itens/updates, `sql/05_simulate_daily_activity.sql`); a outra roda o pipeline completo 15 minutos depois (`Bronze → Silver → Gold → Diamond → export Power BI`). Rodar isso de verdade (repetidamente, com dados "de agora") expôs e permitiu corrigir 3 bugs reais que o seed histórico original nunca tinha exposto — um bug de precisão no predicado incremental, um bug de timezone (Spark interpretando timestamps UTC do SQL Server como hora local), e falhas de orquestração no PowerShell — todos documentados em `docs/automation.md`.
+
+**Produção (planejado, não implementado — exige migrar para AWS):**
 
 - **Databricks Jobs** (recomendado): 1 Job com 4 tasks em sequência (`ingest_bronze → transform_silver → model_gold → create_diamond`, dependência linear com retry/alerta nativos), agendado via cron diário. Um orquestrador externo (Airflow/MWAA) só se justifica se surgir mais de um pipeline para coordenar — não é o caso aqui.
 - **Power BI Service com atualização agendada**, conectado via Athena (sem exigir Gateway de Dados Local, já que Athena é um serviço cloud) — configurado para rodar logo após o horário esperado de término do Job.
 - Detalhamento completo (passo a passo, e a opção de acoplar via Power BI REST API em vez de horário fixo): `powerbi/README.md`, seção "Atualização automática".
 
-Nenhuma dessas duas peças foi configurada nesta fase do projeto (decisão consciente de não migrar para AWS agora) — ficam documentadas para o dia da migração.
+Essa parte cloud não foi configurada nesta fase do projeto (decisão consciente de não migrar para AWS agora) — fica documentada para o dia da migração.
 
 ## 5. Segurança e governança
 

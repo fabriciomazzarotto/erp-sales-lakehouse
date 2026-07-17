@@ -53,6 +53,15 @@ def read_incremental_table(
     ganho de negócio aqui), truncamos os dois lados para o segundo inteiro —
     prática padrão em pipelines com watermark, e o MERGE idempotente cobre
     com folga a pequena sobreposição que isso introduz.
+
+    A comparação é feita como INTEIRO (segundos desde uma âncora), não
+    reconstruindo um DATETIME truncado com DATEADD(DATEDIFF(...)) para depois
+    comparar contra uma string — essa forma (usada numa versão anterior deste
+    módulo) disparava "conversão de varchar para datetime fora do intervalo"
+    de forma intermitente nesta instância de SQL Server (2025 RTM-GDR), por
+    alguma inferência de tipo do otimizador ao reconciliar o literal string
+    com o resultado do DATEADD dentro do WHERE — reproduzido e confirmado via
+    sqlcmd; comparar dois inteiros evita esse caminho de código inteiro.
     """
     if last_watermark is None:
         predicate = "1=1"
@@ -60,8 +69,10 @@ def read_incremental_table(
         # Âncora fixa recente (não '0'/1900-01-01): DATEDIFF(SECOND, ...) retorna INT,
         # e a diferença em segundos entre 1900-01-01 e hoje já estoura o INT (>68 anos).
         anchor = "'2020-01-01'"
-        truncated_column = f"DATEADD(SECOND, DATEDIFF(SECOND, {anchor}, {watermark_column}), {anchor})"
-        predicate = f"{truncated_column} > '{last_watermark}'"
+        predicate = (
+            f"DATEDIFF(SECOND, {anchor}, {watermark_column}) > "
+            f"DATEDIFF(SECOND, {anchor}, CAST('{last_watermark}' AS DATETIME2))"
+        )
     subquery = f"(SELECT * FROM {source_table} WHERE {predicate}) AS incremental_extract"
 
     return (

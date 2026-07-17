@@ -106,6 +106,7 @@ erp-sales-lakehouse/
 - [x] Infraestrutura AWS como código (Terraform: S3/IAM/Glue/Athena) — validada, não aplicada (ver [`infra/terraform/README.md`](infra/terraform/README.md))
 - [x] Documentação Power BI (conexão, DAX, layout de páginas) + export local dos dados
 - [x] Documentação final (dicionário de dados, regras de negócio, arquitetura) + versão em inglês
+- [x] Automação diária local (Windows Task Scheduler: simula atividade do ERP + roda o pipeline sozinho todo dia — ver [`docs/automation.md`](docs/automation.md))
 - [ ] Dashboard Power BI (o `.pbix` em si)
 - [ ] Post para LinkedIn
 

@@ -26,9 +26,20 @@ def get_spark_session(app_name: str = "erp-sales-lakehouse"):
     máquina (Docker Desktop reescreve a resolução do hostname local para
     "host.docker.internal"). Também requer Python 3.11 no venv — PySpark
     quebra no Windows com Python 3.12+ (SPARK-53759). Ver requirements.txt.
+
+    Fuso horário forçado para UTC (JVM + sessão Spark): o SQL Server grava
+    UpdatedAt/IssueDate via SYSUTCDATETIME() (UTC "sem fuso"). Sem isso, o
+    Spark nesta máquina (rodando em "E. South America Standard Time",
+    UTC-3) interpreta esses timestamps como hora LOCAL, deslocando-os 3h
+    para frente — o suficiente para notas recém-criadas (simulação diária)
+    parecerem ter data de emissão no futuro e caírem na quarentena da Silver
+    por engano. Bug real encontrado rodando o pipeline agendado de verdade
+    com dados "de agora" — o seed inicial (datas espalhadas em 18 meses)
+    nunca chegou perto o suficiente do "agora" para expor isso.
     """
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+    os.environ["TZ"] = "UTC"
 
     if RUN_MODE == "local":
         os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
@@ -46,9 +57,13 @@ def get_spark_session(app_name: str = "erp-sales-lakehouse"):
             .config("spark.driver.bindAddress", "127.0.0.1")
         )
 
-    builder = builder.config(
-        "spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension"
-    ).config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+    builder = (
+        builder.config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.driver.extraJavaOptions", "-Duser.timezone=UTC")
+        .config("spark.executor.extraJavaOptions", "-Duser.timezone=UTC")
+    )
 
     spark = configure_spark_with_delta_pip(
         builder, extra_packages=[MSSQL_JDBC_DRIVER_PACKAGE]
