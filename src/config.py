@@ -48,6 +48,30 @@ def get_jdbc_properties() -> dict:
     }
 
 
+# --- SQL Server (camada de serving BI — Diamond publicada para o Power BI) ---
+SQLSERVER_BI_DATABASE = os.getenv("SQLSERVER_BI_DATABASE", "ERP_Sales_BI")
+SQLSERVER_BI_USER = os.getenv("SQLSERVER_BI_USER")
+SQLSERVER_BI_PASSWORD = os.getenv("SQLSERVER_BI_PASSWORD")
+
+
+def get_bi_jdbc_url() -> str:
+    """URL JDBC do banco de serving BI (ERP_Sales_BI), mesma instância do banco de origem."""
+    return (
+        f"jdbc:sqlserver://{SQLSERVER_HOST}:{SQLSERVER_PORT}"
+        f";databaseName={SQLSERVER_BI_DATABASE}"
+        ";encrypt=true;trustServerCertificate=true"
+    )
+
+
+def get_bi_jdbc_properties() -> dict:
+    """Propriedades de conexão JDBC do login de escrita da camada BI (erp_bi_writer)."""
+    return {
+        "user": SQLSERVER_BI_USER,
+        "password": SQLSERVER_BI_PASSWORD,
+        "driver": MSSQL_JDBC_DRIVER_CLASS,
+    }
+
+
 # --- Camadas do Lakehouse (Bronze/Silver/Gold/Diamond) ---
 LOCAL_LAKEHOUSE_ROOT = os.getenv("LOCAL_LAKEHOUSE_ROOT", "./data/lakehouse")
 

@@ -122,7 +122,7 @@ python -m venv .venv
 # 2. Banco de origem (SQL Server local — ver sql/00 a sql/04, nessa ordem)
 sqlcmd -S <seu_servidor> -E -C -i sql/00_create_database.sql
 sqlcmd -S <seu_servidor> -E -C -i sql/01_create_tables.sql
-sqlcmd -S <seu_servidor> -E -C -i sql/02_insert_sample_data.sql
+sqlcmd -S <seu_servidor> -E -C -f 65001 -i sql/02_insert_sample_data.sql
 
 # 3. .env — copiar .env.example para .env e preencher (SQL Server local + RUN_MODE=local)
 

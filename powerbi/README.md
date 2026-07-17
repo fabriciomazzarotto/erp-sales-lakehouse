@@ -10,10 +10,15 @@ seção "O que foi validado").
 
 Conteúdo deste diretório:
 
-- `export_snapshot.py` — gera o snapshot local usado como fonte de dados hoje
-  (ver "Caminho 1 — Local").
+- `publish_to_sql.py` — publica a Diamond no banco `ERP_Sales_BI` (SQL Server
+  local), fonte de dados recomendada hoje (ver "Caminho 1 — SQL Server
+  local"). É o último passo de `scripts/run_pipeline.ps1`.
+- `export_snapshot.py` — gera um snapshot Parquet alternativo (ver "Caminho
+  1-B — Parquet local"), mantido no repositório mas **fora** do pipeline
+  agendado desde que o Caminho 1 passou a existir.
 - `export/` — saída do script acima (Parquet, **gerado, não versionado** —
-  está no `.gitignore`; regenerar rodando o script).
+  está no `.gitignore`; regenerar rodando `export_snapshot.py` manualmente,
+  se optar por esse caminho).
 - Este `README.md` — conexão, modelo semântico, medidas DAX, plano de páginas.
 
 ## Princípio geral
@@ -29,7 +34,7 @@ formatação de exibição. A lista completa está na seção "Medidas DAX".
 
 ---
 
-## Como conectar (dois caminhos)
+## Como conectar (três caminhos)
 
 O projeto roda hoje em `RUN_MODE=local` (decisão tomada: sem migração para
 AWS por ora). Isso importa para a conexão do Power BI porque **Power BI
@@ -62,83 +67,104 @@ KPIs comerciais nesta rodada — e o número exato de duplicação varia a cada
 vez que o pipeline roda de novo, o que tornaria o erro difícil de notar (o
 dashboard "funciona", só está errado).
 
-### Caminho 1 — Local (hoje, sem AWS)
+### Caminho 1 — SQL Server local (hoje, recomendado)
 
-**`powerbi/export_snapshot.py`** resolve isso: lê cada uma das 6 tabelas
-Diamond pelo motor Delta (respeitando `_delta_log`, portanto sempre a versão
-atual e correta) e regrava cada uma como **um único arquivo Parquet solto**,
-sem `_delta_log`, sem histórico de versões, em `powerbi/export/<tabela>.parquet`.
-O Power BI aponta para esse arquivo achatado — nunca para a pasta Delta
-original.
+**`powerbi/publish_to_sql.py`** lê cada uma das 6 tabelas Diamond pelo motor
+Delta (respeitando `_delta_log`, portanto sempre a versão atual e correta) e
+publica cada uma como uma tabela relacional em **`ERP_Sales_BI`** — um banco
+SQL Server dedicado, separado do banco de origem do ERP (`ERP_Sales`), criado
+por `sql/06_create_bi_database.sql`. É o último passo de
+`scripts/run_pipeline.ps1`, rodando automaticamente todo dia (ver
+`docs/automation.md`).
 
-Formato escolhido: **Parquet**, não CSV. Motivo: Parquet carrega o schema
-tipado (`int`, `double`, `decimal`, `string`, `boolean`) dentro do próprio
-arquivo — o Power BI lê os tipos diretamente, sem inferência de texto. Um CSV
-depende da inferência de tipo do Power Query, que é sensível à configuração
-regional do Windows/Power BI: em uma máquina com localidade pt-BR (separador
-decimal `,`), um CSV com decimal `.` pode ser importado errado (coluna
-numérica virando texto) se a localidade/origem do arquivo não for ajustada à
-mão em cada uma das 6 importações. Parquet elimina essa classe de erro
-inteira — não existe "separador decimal" em um arquivo binário tipado. Custo:
-nenhum relevante neste volume (a maior tabela, `target_vs_actual`, tem 186
-linhas).
+Por que um banco separado (e não escrever de volta em `ERP_Sales`): mistura
+o papel de "sistema fonte" (o ERP transacional simulado) com o de "sistema de
+consumo analítico" — numa migração futura pra AWS essas duas coisas são
+fisicamente diferentes (SQL Server on-prem vs. Athena/Glue). O login que
+escreve (`erp_bi_writer`) só tem permissão em `ERP_Sales_BI`, sem acesso
+nenhum ao schema `erp.*` de origem — mesmo princípio de least privilege do
+login de leitura (`erp_extractor`), aplicado no sentido inverso.
 
 **Passo a passo:**
 
-1. Gerar (ou regenerar) o snapshot:
+1. Pré-requisito (uma vez só, já feito nesta máquina): criar o banco e o
+   login de escrita —
 
-   ```bash
-   .venv/Scripts/python.exe powerbi/export_snapshot.py
+   ```powershell
+   sqlcmd -S localhost,14333 -E -C -v LoginPassword="SuaSenhaForte" -i sql\06_create_bi_database.sql
    ```
 
-   Isso grava/sobrescreve os 6 arquivos em `powerbi/export/`:
-   `monthly_sales.parquet`, `product_ranking.parquet`, `customer_ranking.parquet`,
-   `salesperson_performance.parquet`, `target_vs_actual.parquet`,
-   `commercial_kpis.parquet`.
+   e preencher `SQLSERVER_BI_DATABASE`/`SQLSERVER_BI_USER`/`SQLSERVER_BI_PASSWORD`
+   no `.env` (ver `.env.example`).
 
-2. No Power BI Desktop: **Obter Dados → Mais... → Arquivo → Parquet** (ou
-   digite "Parquet" na busca do conector).
+2. Publicar (ou republicar) a Diamond no banco BI:
 
-3. Aponte para **um arquivo por vez** — ex.: `powerbi/export/commercial_kpis.parquet`.
-   **Não use "Obter Dados → Pasta" apontando para `powerbi/export/`**: o
-   conector de pasta do Power BI trata todos os arquivos parquet de uma pasta
-   como um único dataset combinado ("Combine Files"), e as 6 tabelas Diamond
-   têm schemas diferentes — combiná-las produziria um resultado sem sentido
-   (colunas misturadas/nulas). Repita o passo 2-3 seis vezes, uma por
-   arquivo (ou use "Transformar Dados → Nova Fonte" para as seguintes).
+   ```bash
+   .venv/Scripts/python.exe powerbi/publish_to_sql.py
+   ```
 
-4. "Transformar Dados" (recomendado, para conferir os tipos antes de
-   carregar) ou "Carregar" direto — o schema já vem correto do Parquet, não
-   deveria ser necessário ajustar tipos manualmente.
+   Isso sobrescreve as 6 tabelas em `ERP_Sales_BI.dbo.*`: `monthly_sales`,
+   `product_ranking`, `customer_ranking`, `salesperson_performance`,
+   `target_vs_actual`, `commercial_kpis`.
 
-5. Repita para as 6 tabelas. No painel "Dados" do Power BI, cada uma já
-   aparece com o nome do arquivo (`commercial_kpis`, `monthly_sales`, etc.).
+3. No Power BI Desktop: **Obter Dados → Mais... → Banco de Dados → SQL
+   Server**.
 
-6. Modo de armazenamento: **Import** (padrão — Parquet local não suporta
-   DirectQuery de qualquer forma).
+4. Servidor: `localhost,14333` (ou o host/porta reais, ver `.env`). Banco de
+   dados: `ERP_Sales_BI`. Modo de conectividade de dados: **Importar**.
+
+5. Autenticação: **Banco de dados**, usuário `erp_bi_writer` (ou crie um
+   login de leitura dedicado só para o Power BI se preferir não reutilizar o
+   de escrita — mesma lógica de least privilege, ver observação abaixo).
+
+6. No navegador, selecione as 6 tabelas em `dbo` e carregue.
 
 7. Configure relacionamentos (ver seção "Modelo semântico"), crie as medidas
    (ver "Medidas DAX") e monte as páginas (ver "Plano de páginas").
 
-**Atualização (refresh):** sem gateway/agendamento (arquivo local, fora do
-Power BI Service). Fluxo manual sempre que a Gold mudar:
-`notebooks/04_create_diamond.py` → `powerbi/export_snapshot.py` → no Power BI
-Desktop, **Página Inicial → Atualizar**. Como os arquivos exportados mantêm o
-mesmo nome/caminho, o Power BI reconsulta as mesmas fontes sem precisar
-reconfigurar nada.
+> **Sobre reusar `erp_bi_writer` para leitura no Power BI:** aceitável neste
+> projeto de portfólio (o banco só contém dado já agregado/público dentro do
+> próprio pipeline, sem PII sensível adicional), mas o padrão mais correto em
+> produção seria um terceiro login **SELECT-only** em `ERP_Sales_BI`,
+> dedicado ao Power BI — nem o de extração (leitura da origem) nem o de
+> escrita (publicação da Diamond) deveriam também ser o de consumo do BI.
+> Não implementado aqui para não multiplicar logins num projeto local de
+> demonstração, mas vale a nota para quem for levar este padrão a produção.
+
+**Atualização (refresh):** ver seção "Atualização automática" abaixo — este é
+o caminho que finalmente permite agendamento de verdade sem depender de AWS,
+via Power BI Service + Gateway de Dados Local.
+
+### Caminho 1-B — Parquet local (alternativa mais simples, sem banco)
+
+Mantido no repositório (`powerbi/export_snapshot.py`) para quem preferir não
+configurar banco/gateway — útil para uma conferência rápida dos números sem
+montar a infraestrutura do Caminho 1. Deixou de ser o passo padrão do
+pipeline agendado (`scripts/run_pipeline.ps1` roda `publish_to_sql.py`, não
+mais `export_snapshot.py`).
+
+Resolve o mesmo problema do Caminho 1 (não apontar direto pra pasta Delta):
+lê cada tabela pelo motor Delta e regrava como **um único arquivo Parquet
+solto** por tabela em `powerbi/export/<tabela>.parquet`. Formato Parquet (não
+CSV) porque carrega o schema tipado no próprio arquivo — sem depender da
+inferência de tipo do Power Query, sensível à localidade regional do Windows.
+
+Passo a passo resumido: `.venv/Scripts/python.exe powerbi/export_snapshot.py`
+→ Power BI Desktop → **Obter Dados → Mais... → Arquivo → Parquet** → aponte
+para **um arquivo por vez** em `powerbi/export/` (nunca "Obter Dados → Pasta"
+— o conector de pasta combina os 6 schemas diferentes num dataset sem
+sentido) → repita para as 6 tabelas → **Import**.
+
+**Atualização (refresh):** manual, sempre — sem gateway/agendamento possível
+(arquivo local, fora do alcance do Power BI Service sem um gateway apontando
+pra essa pasta especificamente). Fluxo: `export_snapshot.py` → no Power BI
+Desktop, **Página Inicial → Atualizar**.
 
 ### Caminho 2 — Produção (Athena, quando `RUN_MODE=aws` for aplicado)
 
 **Não testável agora** (não migramos para AWS) — documentado para quando a
 migração acontecer, já que a infraestrutura já está definida em
 `infra/terraform/glue.tf`/`athena.tf`.
-
-> **Por que o Caminho 1 (Parquet local) nunca vai atualizar sozinho:** é um
-> snapshot manual, pensado só para montar/testar o `.pbix` sem custo de AWS —
-> cada atualização exige rodar `export_snapshot.py` de novo e clicar
-> "Atualizar" no Power BI Desktop à mão. **Atualização automática de verdade
-> (ex.: todo dia, seguindo o ERP) só existe no Caminho 2 abaixo**, porque
-> depende do Power BI **Service** (nuvem), não do Desktop.
 
 1. **Pré-requisito de infraestrutura** (já provisionado no Terraform, não é
    trabalho novo): `aws_glue_crawler.lakehouse["diamond"]` usa `delta_target`
@@ -187,49 +213,60 @@ migração acontecer, já que a infraestrutura já está definida em
 
 O ERP de origem muda todo dia (novas notas, devoluções, metas). Pra o
 dashboard acompanhar isso sozinho, duas peças precisam estar agendadas —
-**nenhuma delas depende de alguém abrir o Power BI Desktop**:
+**nenhuma delas depende de alguém abrir o Power BI Desktop**. Isso já é
+possível **hoje, sem AWS**, usando o Caminho 1 (SQL Server local).
 
-**a) Agendar o pipeline de dados** (fora do Power BI, roda antes dele):
+**a) Agendar o pipeline de dados — já implementado localmente:**
 
-- **Databricks Jobs** (recomendado, é o motor de processamento já previsto no
-  projeto): criar um Job com 4 tasks em sequência —
-  `01_ingest_bronze → 02_transform_silver → 03_model_gold → 04_create_diamond`
-  (dependência linear, cada task só roda se a anterior tiver sucesso) — com
-  agendamento *cron* (ex.: todo dia às 5h). Databricks Jobs já tem retry e
-  alerta de falha nativos, sem precisar de um orquestrador separado para um
-  pipeline deste tamanho (4 estágios sequenciais).
-- Alternativa para uma esteira mais complexa/multi-pipeline no futuro:
-  **Apache Airflow** (MWAA na AWS) — só se justifica a partir do momento que
-  existir mais de um pipeline para coordenar, ou dependências não lineares.
-- O Glue Crawler **não precisa** rodar a cada execução do pipeline — o schema
-  das tabelas Diamond não muda de um dia para o outro, só o conteúdo. Rodar o
-  crawler é necessário apenas quando uma coluna nova for adicionada.
+Duas tarefas no Windows Task Scheduler (`docs/automation.md`): uma simula
+atividade nova no ERP, a outra roda `scripts/run_pipeline.ps1`
+(`Bronze → Silver → Gold → Diamond → publish_to_sql.py`) 15 minutos depois.
+Sem custo, sem depender de nenhum serviço cloud. Em produção (quando migrar
+pra AWS), o equivalente seria um **Databricks Job** com 4 tasks em sequência
+e agendamento *cron* — ver observação ao final desta seção.
 
 **b) Agendar a atualização no Power BI Service** (depois que o pipeline do
-dia terminar):
+dia terminar) — dois sub-caminhos, dependendo de qual fonte o `.pbix` usa:
 
-1. Publicar o `.pbix` no Power BI Service (`Arquivo → Publicar`), num
-   workspace (não é o Desktop que atualiza sozinho, é o Service).
-2. No workspace, nas configurações do dataset: **Configurações → Atualização
-   agendada → Ativado**.
-3. Frequência: diária, horário definido **depois** do horário esperado de
-   término do Job do Databricks (ex.: pipeline roda às 5h, refresh do Power
-   BI agendado para 6h — margem de segurança).
-4. Como a fonte é Athena (serviço nativo da AWS, na nuvem), **não é
-   necessário instalar um Gateway de Dados Local** — isso só seria exigido se
-   a fonte fosse algo dentro da rede/máquina local (ex.: o SQL Server on-prem
-   ou o Parquet do Caminho 1).
-5. Credenciais Athena/AWS são configuradas uma vez no dataset publicado, o
-   Power BI Service as reutiliza em cada atualização agendada.
+**Se a fonte for o Caminho 1 (SQL Server local, `ERP_Sales_BI`) — automático
+sem AWS:**
+
+1. Instalar o **Gateway de Dados Local (modo pessoal)** nesta máquina —
+   gratuito, é o mesmo mecanismo que qualquer empresa usa para o Power BI
+   Service enxergar um SQL Server on-premises. Download e instruções:
+   [Gateway de dados local — Microsoft Learn](https://learn.microsoft.com/power-bi/connect-data/service-gateway-onprem).
+2. Publicar o `.pbix` no Power BI Service (`Arquivo → Publicar`).
+3. No workspace, nas configurações do dataset: associar o Gateway instalado
+   e configurar **Atualização agendada → Ativado**.
+4. Frequência: diária, horário definido **depois** do horário da tarefa
+   `ERP Sales Lakehouse - Run Pipeline` (hoje às 05:15 — ver
+   `docs/automation.md`), com margem de segurança (ex.: refresh às 06:00).
+5. Credenciais do SQL Server (`erp_bi_writer` ou um login de leitura
+   dedicado, ver nota no Caminho 1) são configuradas uma vez no dataset
+   publicado; o Power BI Service as reutiliza em cada atualização agendada
+   através do Gateway.
+
+**Se a fonte for Athena (Caminho 2, produção/AWS):** não precisa de Gateway
+— Athena é um serviço cloud nativo, o Power BI Service acessa direto. Mesmos
+passos 2-4 acima, pulando o passo 1.
+
+**Se a fonte for o Caminho 1-B (Parquet local):** não há agendamento real
+possível sem também instalar um Gateway apontando pra essa pasta — e mesmo
+assim seria mais frágil que o Caminho 1 (seção de risco de leitura direta de
+pasta Delta não se aplica ao Parquet solto, mas o arquivo ainda depende de
+alguém rodar `export_snapshot.py` manualmente antes do refresh). Por isso
+não é o caminho recomendado para automação — use o Caminho 1.
 
 **Opção mais avançada (acoplamento mais forte, não implementada aqui):** em
-vez de confiar só no horário fixo (passo 3), o próprio Job do Databricks pode
+vez de confiar só no horário fixo do passo 4, o próprio job de pipeline pode
 disparar a atualização do Power BI ao final da execução, chamando a
 [Power BI REST API](https://learn.microsoft.com/rest/api/power-bi/datasets/refresh-dataset)
-(`POST /datasets/{id}/refreshes`) como último passo do Job — o dashboard
-atualiza assim que o dado está pronto, em vez de esperar uma janela de tempo
-fixa que pode ser cedo demais (pipeline atrasou) ou tarde demais (dado pronto
-há uma hora, mas ninguém viu ainda).
+(`POST /datasets/{id}/refreshes`) como último passo — o dashboard atualiza
+assim que o dado está pronto, em vez de esperar uma janela de tempo fixa que
+pode ser cedo demais (pipeline atrasou) ou tarde demais (dado pronto há uma
+hora, mas ninguém viu ainda). Funciona tanto com o Task Scheduler local
+quanto com um Databricks Job em produção — é uma chamada HTTP no fim do
+script/task, independente de quem orquestra.
 
 ---
 
@@ -248,28 +285,28 @@ Contagens conferem com `docs/data_dictionary.md` (seção Diamond) e com a
 leitura Delta original — ver "O que foi validado" ao final.
 
 Dicionário completo de colunas: `docs/data_dictionary.md` (seção Diamond).
-Os tipos exatos exportados (conferidos nesta sessão lendo os `.parquet`
-gerados) estão documentados inline nos comentários de
-`powerbi/export_snapshot.py` e reproduzidos abaixo apenas onde relevante para
-uma medida DAX específica.
+Os tipos exatos publicados (conferidos nesta sessão lendo de volta tanto as
+tabelas em `ERP_Sales_BI` quanto os `.parquet` gerados) estão documentados
+inline nos comentários de `powerbi/publish_to_sql.py`/`powerbi/export_snapshot.py`
+e reproduzidos abaixo apenas onde relevante para uma medida DAX específica.
 
 ---
 
 ## Modelo semântico — relacionamentos
 
-### Caminho local (hoje)
+### Caminho 1 / 1-B — local (SQL Server ou Parquet)
 
 **Nenhum relacionamento entre as 6 tabelas Diamond é necessário nem
-recomendado no snapshot local.** Isso é uma revisão em relação à primeira
+recomendado nos caminhos locais.** Isso é uma revisão em relação à primeira
 versão deste documento: a recomendação anterior de relacionar
 `monthly_sales`/`target_vs_actual` às dimensões `gold.dim_*` (por
 `region_key`/`salesperson_key`) só faz sentido se essas dimensões também
-estiverem carregadas no Power BI — e **não estão**: `export_snapshot.py`
-exporta só as 6 tabelas Diamond, não `gold.dim_*` (fora do escopo da camada
-Diamond). As colunas `*_key` continuam presentes no snapshot (ex.:
-`monthly_sales.region_key`, `target_vs_actual.salesperson_key`) para o dia em
-que alguém decidir exportar também as dimensões da Gold, mas hoje elas não
-têm a que se relacionar.
+estiverem carregadas no Power BI — e **não estão**: tanto
+`publish_to_sql.py` quanto `export_snapshot.py` publicam só as 6 tabelas
+Diamond, não `gold.dim_*` (fora do escopo da camada Diamond). As colunas
+`*_key` continuam presentes (ex.: `monthly_sales.region_key`,
+`target_vs_actual.salesperson_key`) para o dia em que alguém decidir também
+publicar as dimensões da Gold, mas hoje elas não têm a que se relacionar.
 
 Cada tabela Diamond já é autocontida (atributos descritivos — nome, região,
 categoria, segmento — denormalizados) e funciona como tabela standalone,
@@ -282,6 +319,7 @@ páginas diferentes pela mesma região** (ex.: selecionar "Sudeste" e afetar
 tanto o gráfico de `monthly_sales` quanto a tabela de `target_vs_actual`),
 isso não é possível sem uma dimensão compartilhada. Duas opções, em ordem de
 preferência:
+
 1. Resolver no Lakehouse: se esse cruzamento vier a ser um requisito real do
    dashboard, o caminho correto é adicionar `dim_region` (e as demais `dim_*`
    necessárias) à lista de tabelas exportadas por `export_snapshot.py` — não
@@ -608,25 +646,31 @@ contexto de tendência regional na mesma página).
 
 Validado programaticamente nesta sessão (sem Power BI Desktop disponível):
 
-- `powerbi/export_snapshot.py` rodado de ponta a ponta contra as tabelas
-  Diamond reais (`.venv/Scripts/python.exe powerbi/export_snapshot.py`):
-  as 6 tabelas exportadas batem em contagem de linhas E em lista de colunas
-  com a leitura Delta original (`monthly_sales`=140, `product_ranking`=24,
+- `powerbi/publish_to_sql.py` rodado de ponta a ponta, tanto isolado quanto
+  dentro de `scripts/run_pipeline.ps1` (via Task Scheduler): as 6 tabelas
+  publicadas em `ERP_Sales_BI` batem em contagem de linhas com a leitura
+  Delta original (`monthly_sales`=143, `product_ranking`=24,
   `customer_ranking`=20, `salesperson_performance`=10, `target_vs_actual`=186,
-  `commercial_kpis`=19 — idêntico ao documentado em
-  `docs/data_dictionary.md`).
+  `commercial_kpis`=19), e a contagem foi conferida de forma independente
+  via `sqlcmd` diretamente contra `ERP_Sales_BI` (não só confiando no
+  autocheck do próprio script).
+- `powerbi/export_snapshot.py` (Caminho 1-B) também rodado de ponta a ponta:
+  as 6 tabelas exportadas batem em contagem de linhas E em lista de colunas
+  com a leitura Delta original.
 - Reproduzido o bug de leitura direta da pasta Delta (`commercial_kpis`: 19
-  linhas via Delta vs. 57 via parquet cru), confirmando por que o snapshot é
-  necessário.
+  linhas via Delta vs. 57 via parquet cru), confirmando por que nenhum dos
+  dois caminhos locais lê a pasta Delta diretamente.
 - Schema/tipos de cada `.parquet` exportado foram lidos de volta e conferidos
   (tipos `decimal`/`double`/`int`/`bigint`/`boolean`/`string` preservados,
   sem inferência de texto envolvida).
 
 **Não pôde ser testado** (sem acesso a Power BI Desktop/automação de GUI
-neste ambiente): a importação real dos arquivos no Power BI, o comportamento
-visual das medidas DAX, o layout final das páginas, e o caminho Athena
-(depende de migração para `RUN_MODE=aws`, fora do escopo desta sessão). As
-medidas DAX seguem padrões-safe e amplamente documentados
+neste ambiente): a importação real das tabelas/arquivos no Power BI, o
+comportamento visual das medidas DAX, o layout final das páginas, o Gateway
+de Dados Local (instalação/configuração é uma ação na conta pessoal do
+usuário no Power BI Service), e o caminho Athena (depende de migração para
+`RUN_MODE=aws`, fora do escopo desta sessão). As medidas DAX seguem
+padrões-safe e amplamente documentados
 (`SELECTEDVALUE`/`CALCULATE`/`ALL`/`RANKX`/`ALLSELECTED`/`DIVIDE`), mas devem
 ser conferidas visualmente pelo usuário ao montar o `.pbix` — se algum
 resultado não bater, o primeiro lugar a checar é o filtro de contexto

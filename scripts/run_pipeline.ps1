@@ -1,7 +1,8 @@
 # run_pipeline.ps1
 #
 # Orquestra a execucao diaria do pipeline ERP Sales Lakehouse:
-# Bronze -> Silver -> Gold -> Diamond -> export para Power BI.
+# Bronze -> Silver -> Gold -> Diamond -> publicacao em ERP_Sales_BI (SQL Server)
+# para o Power BI ler via conector nativo, sem depender de arquivo local.
 # Deve rodar DEPOIS de run_daily_erp_simulation.ps1 no agendamento do
 # Task Scheduler (precisa de dado novo na origem para ter o que processar)
 # — ver docs/automation.md.
@@ -28,7 +29,7 @@ $Steps = @(
     "notebooks\02_transform_silver.py",
     "notebooks\03_model_gold.py",
     "notebooks\04_create_diamond.py",
-    "powerbi\export_snapshot.py"
+    "powerbi\publish_to_sql.py"
 )
 
 # Toda escrita no log passa por aqui, com retry — o arquivo pode ficar

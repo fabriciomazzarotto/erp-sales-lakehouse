@@ -26,7 +26,14 @@ $SqlScript = Join-Path $ProjectRoot "sql\05_simulate_daily_activity.sql"
 # Captura via pipeline do PowerShell (nao redirecionamento *>> cru) para evitar
 # o output do sqlcmd (console codepage/UTF-16) virar texto com espacos entre
 # cada caractere no arquivo de log.
-$result = & sqlcmd -S $SqlServer -E -C -i $SqlScript 2>&1
+#
+# -f 65001 (UTF-8): o .sql tem texto acentuado literal (ex.: "Divergencia no
+# pedido", linha de motivos de devolucao). Sem essa flag, sqlcmd le o arquivo
+# usando a code page padrao do console (nao UTF-8), gravando cada caractere
+# acentuado como 2 caracteres Latin-1 separados no banco ("Divergencia" vira
+# "DivergÃªncia") -- bug real encontrado e corrigido nesta sessao, ver
+# scripts/fix_source_encoding.py e docs/automation.md.
+$result = & sqlcmd -S $SqlServer -E -C -f 65001 -i $SqlScript 2>&1
 $result | Out-File -FilePath $LogFile -Append -Encoding utf8
 
 if ($LASTEXITCODE -ne 0) {

@@ -17,8 +17,9 @@ resolvem isso:
    nova no SQL Server de origem (`sql/05_simulate_daily_activity.sql`, via
    `scripts/run_daily_erp_simulation.ps1`).
 2. **`ERP Sales Lakehouse - Run Pipeline`** — roda o pipeline completo
-   (Bronze → Silver → Gold → Diamond → export Power BI, via
-   `scripts/run_pipeline.ps1`), 15 minutos depois da primeira.
+   (Bronze → Silver → Gold → Diamond → publicação em `ERP_Sales_BI` via
+   `powerbi/publish_to_sql.py`, ver `powerbi/README.md`), 15 minutos depois
+   da primeira, via `scripts/run_pipeline.ps1`.
 
 ## O que `sql/05_simulate_daily_activity.sql` gera por execução
 
@@ -105,6 +106,24 @@ que nenhum teste anterior tinha pego:
    da próxima que ocasionalmente causava falha de conexão — corrigido com
    uma folga de 5s entre etapas (exceto após a última, onde não há próxima
    JVM esperando).
+
+4. **Mojibake nas tabelas `erp.*` de origem** (não é bug do pipeline em si,
+   mas foi descoberto olhando o dado real no Power BI): `sql/02_insert_sample_data.sql`
+   e `sql/05_simulate_daily_activity.sql` têm texto acentuado literal (ex.:
+   "São Paulo", "Divergência no pedido"). Rodar esses arquivos .sql (UTF-8)
+   via `sqlcmd` **sem** especificar a code page de entrada faz o sqlcmd ler o
+   arquivo com a code page padrão do console — cada caractere acentuado (2
+   bytes em UTF-8) vira 2 caracteres Latin-1 separados no banco ("São" virava
+   "SÃ£o"). Como `sql/05_simulate_daily_activity.sql` roda TODO DIA via Task
+   Scheduler, esse bug corromperia dado novo continuamente, não só o seed
+   histórico. Corrigido em duas frentes: (a) `scripts/run_daily_erp_simulation.ps1`
+   agora invoca `sqlcmd -f 65001` (UTF-8), então a simulação diária não
+   corrompe mais nada daqui em diante; (b) o histórico já corrompido foi
+   corrigido diretamente nas tabelas de origem por
+   `scripts/fix_source_encoding.py` (script de execução única, reverte o
+   double-encoding e atualiza `UpdatedAt` de cada linha corrigida para que a
+   extração incremental da Bronze propague a correção sozinha, sem precisar
+   reprocessar do zero).
 
 Nenhum desses apareceria só escrevendo o código e rodando uma vez com o
 seed histórico — só apareceram rodando de verdade, repetidamente, com
