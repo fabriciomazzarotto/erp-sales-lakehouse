@@ -133,6 +133,13 @@ reconfigurar nada.
 migração acontecer, já que a infraestrutura já está definida em
 `infra/terraform/glue.tf`/`athena.tf`.
 
+> **Por que o Caminho 1 (Parquet local) nunca vai atualizar sozinho:** é um
+> snapshot manual, pensado só para montar/testar o `.pbix` sem custo de AWS —
+> cada atualização exige rodar `export_snapshot.py` de novo e clicar
+> "Atualizar" no Power BI Desktop à mão. **Atualização automática de verdade
+> (ex.: todo dia, seguindo o ERP) só existe no Caminho 2 abaixo**, porque
+> depende do Power BI **Service** (nuvem), não do Desktop.
+
 1. **Pré-requisito de infraestrutura** (já provisionado no Terraform, não é
    trabalho novo): `aws_glue_crawler.lakehouse["diamond"]` usa `delta_target`
    apontando para cada prefixo `s3://<bucket-diamond>/<tabela>/` — isso
@@ -175,6 +182,54 @@ migração acontecer, já que a infraestrutura já está definida em
    `gold.dim_*` completas também estão disponíveis no catálogo, então o
    modelo em estrela completo (Diamond relacionada às dimensões da Gold) é
    possível; no snapshot local isso não é o caso.
+
+### Atualização automática (o motivo de tudo isso existir)
+
+O ERP de origem muda todo dia (novas notas, devoluções, metas). Pra o
+dashboard acompanhar isso sozinho, duas peças precisam estar agendadas —
+**nenhuma delas depende de alguém abrir o Power BI Desktop**:
+
+**a) Agendar o pipeline de dados** (fora do Power BI, roda antes dele):
+
+- **Databricks Jobs** (recomendado, é o motor de processamento já previsto no
+  projeto): criar um Job com 4 tasks em sequência —
+  `01_ingest_bronze → 02_transform_silver → 03_model_gold → 04_create_diamond`
+  (dependência linear, cada task só roda se a anterior tiver sucesso) — com
+  agendamento *cron* (ex.: todo dia às 5h). Databricks Jobs já tem retry e
+  alerta de falha nativos, sem precisar de um orquestrador separado para um
+  pipeline deste tamanho (4 estágios sequenciais).
+- Alternativa para uma esteira mais complexa/multi-pipeline no futuro:
+  **Apache Airflow** (MWAA na AWS) — só se justifica a partir do momento que
+  existir mais de um pipeline para coordenar, ou dependências não lineares.
+- O Glue Crawler **não precisa** rodar a cada execução do pipeline — o schema
+  das tabelas Diamond não muda de um dia para o outro, só o conteúdo. Rodar o
+  crawler é necessário apenas quando uma coluna nova for adicionada.
+
+**b) Agendar a atualização no Power BI Service** (depois que o pipeline do
+dia terminar):
+
+1. Publicar o `.pbix` no Power BI Service (`Arquivo → Publicar`), num
+   workspace (não é o Desktop que atualiza sozinho, é o Service).
+2. No workspace, nas configurações do dataset: **Configurações → Atualização
+   agendada → Ativado**.
+3. Frequência: diária, horário definido **depois** do horário esperado de
+   término do Job do Databricks (ex.: pipeline roda às 5h, refresh do Power
+   BI agendado para 6h — margem de segurança).
+4. Como a fonte é Athena (serviço nativo da AWS, na nuvem), **não é
+   necessário instalar um Gateway de Dados Local** — isso só seria exigido se
+   a fonte fosse algo dentro da rede/máquina local (ex.: o SQL Server on-prem
+   ou o Parquet do Caminho 1).
+5. Credenciais Athena/AWS são configuradas uma vez no dataset publicado, o
+   Power BI Service as reutiliza em cada atualização agendada.
+
+**Opção mais avançada (acoplamento mais forte, não implementada aqui):** em
+vez de confiar só no horário fixo (passo 3), o próprio Job do Databricks pode
+disparar a atualização do Power BI ao final da execução, chamando a
+[Power BI REST API](https://learn.microsoft.com/rest/api/power-bi/datasets/refresh-dataset)
+(`POST /datasets/{id}/refreshes`) como último passo do Job — o dashboard
+atualiza assim que o dado está pronto, em vez de esperar uma janela de tempo
+fixa que pode ser cedo demais (pipeline atrasou) ou tarde demais (dado pronto
+há uma hora, mas ninguém viu ainda).
 
 ---
 

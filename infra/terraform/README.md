@@ -45,6 +45,7 @@ Este código **não deve ser aplicado** sem passar por isso primeiro:
 6. Copiar os `outputs` (nomes reais dos buckets, ARNs de role, nome do Glue database) para o `.env` do projeto e trocar `RUN_MODE=local` para `RUN_MODE=aws`.
 7. Rodar os crawlers do Glue (`aws glue start-crawler --name ...`) depois da primeira carga de dados em cada bucket, para popular o Data Catalog.
 8. Validar via Athena antes de conectar o Power BI (ver `docs/architecture.md`, seção de segurança/governança).
+9. Agendar o pipeline (Databricks Jobs — os 4 notebooks em sequência, cron diário) e a atualização do dataset no Power BI Service (scheduled refresh via conector Athena, sem gateway) — ver `powerbi/README.md`, seção "Atualização automática", para o passo a passo completo e o porquê de cada peça.
 
 ## Comandos usados para validar este código (sem custo, sem credenciais AWS)
 

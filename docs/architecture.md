@@ -78,6 +78,16 @@ Entre as estratégias possíveis (coluna de data, ID incremental, watermark, has
 
 Tabelas pequenas e de baixa mutação (`Regions`, `PaymentMethods`) serão carregadas em modo **full**, pois o custo de comparação incremental não compensa o ganho.
 
+## 4.1. Orquestração e atualização automática (produção)
+
+O pipeline hoje é rodado manualmente (`.venv/Scripts/python notebooks/0X_*.py`, em sequência). Isso é aceitável para desenvolvimento/portfólio, mas um ERP real gera dado novo todo dia — a versão de produção precisa disso agendado, não disparado à mão:
+
+- **Databricks Jobs** (recomendado): 1 Job com 4 tasks em sequência (`ingest_bronze → transform_silver → model_gold → create_diamond`, dependência linear com retry/alerta nativos), agendado via cron diário. Um orquestrador externo (Airflow/MWAA) só se justifica se surgir mais de um pipeline para coordenar — não é o caso aqui.
+- **Power BI Service com atualização agendada**, conectado via Athena (sem exigir Gateway de Dados Local, já que Athena é um serviço cloud) — configurado para rodar logo após o horário esperado de término do Job.
+- Detalhamento completo (passo a passo, e a opção de acoplar via Power BI REST API em vez de horário fixo): `powerbi/README.md`, seção "Atualização automática".
+
+Nenhuma dessas duas peças foi configurada nesta fase do projeto (decisão consciente de não migrar para AWS agora) — ficam documentadas para o dia da migração.
+
 ## 5. Segurança e governança
 
 - **IAM** (implementado em `infra/terraform/iam.tf`): role de execução do pipeline restrita aos 4 buckets do Lakehouse (nunca `s3:*`/`Resource: "*"`), e role separada para o Glue Crawler (só leitura) — mesmo princípio de least privilege usado no login `erp_extractor` do SQL Server (`sql/04_create_pipeline_login.sql`).
